@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GCP Organization Visualizer</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Google Sans', 'Segoe UI', Roboto, sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  #header {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  #header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #58a6ff;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #header h1::before { content: '☁'; font-size: 20px; }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    flex-wrap: wrap;
+  }
+
+  input[type="text"] {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    color: #e6edf3;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+    width: 200px;
+    transition: border-color 0.2s;
+  }
+  input[type="text"]:focus { border-color: #58a6ff; }
+  input[type="text"]::placeholder { color: #6e7681; }
+
+  button {
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #e6edf3;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  button:hover { background: #30363d; border-color: #8b949e; }
+  button.primary {
+    background: #1f6feb;
+    border-color: #1f6feb;
+    color: #fff;
+  }
+  button.primary:hover { background: #388bfd; border-color: #388bfd; }
+
+  .sep { width: 1px; height: 24px; background: #30363d; }
+
+  /* ── Legend ── */
+  #legend {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: #8b949e;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* ── Canvas ── */
+  #canvas {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  svg#tree-svg {
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+  }
+  svg#tree-svg:active { cursor: grabbing; }
+
+  /* ── D3 elements ── */
+  .link {
+    fill: none;
+    stroke: #30363d;
+    stroke-width: 1.5px;
+  }
+
+  .node rect {
+    rx: 8;
+    ry: 8;
+    stroke-width: 1.5;
+    cursor: pointer;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.4));
+    transition: filter 0.15s;
+  }
+  .node rect:hover { filter: drop-shadow(0 4px 12px rgba(0,0,0,0.7)); }
+
+  .node text {
+    font-size: 12px;
+    fill: #fff;
+    pointer-events: none;
+    dominant-baseline: middle;
+  }
+  .node .node-icon { font-size: 14px; }
+  .node .node-name { font-size: 12px; font-weight: 500; }
+  .node .node-sub  { font-size: 10px; fill: rgba(255,255,255,0.65); }
+  .node .toggle-btn {
+    font-size: 13px;
+    font-weight: 700;
+    fill: rgba(255,255,255,0.8);
+    cursor: pointer;
+  }
+  .node .badge {
+    font-size: 10px;
+    font-weight: 600;
+    fill: rgba(255,255,255,0.9);
+  }
+
+  /* ── Tooltip ── */
+  #tooltip {
+    position: fixed;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    max-width: 260px;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  #tooltip.visible { opacity: 1; }
+  #tooltip .tt-title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 6px;
+    color: #e6edf3;
+    border-bottom: 1px solid #30363d;
+    padding-bottom: 6px;
+  }
+  #tooltip .tt-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    color: #8b949e;
+  }
+  #tooltip .tt-key { color: #58a6ff; min-width: 90px; }
+  #tooltip .tt-val { color: #e6edf3; word-break: break-all; }
+
+  /* ── Loading overlay ── */
+  #loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(13,17,23,0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    z-index: 50;
+    backdrop-filter: blur(2px);
+  }
+  #loading.hidden { display: none; }
+  .spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid #30363d;
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { color: #8b949e; font-size: 14px; }
+
+  /* ── Empty/error state ── */
+  #empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: #6e7681;
+    font-size: 14px;
+  }
+  #empty-state.hidden { display: none; }
+  #empty-state .icon { font-size: 48px; }
+  #empty-state .msg { color: #8b949e; }
+  #empty-state .sub  { font-size: 12px; }
+
+  /* ── Stats bar ── */
+  #stats-bar {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 11px;
+    color: #8b949e;
+    display: flex;
+    gap: 16px;
+  }
+  .stat-item span { color: #e6edf3; font-weight: 600; }
+
+  /* ── Zoom controls ── */
+  #zoom-controls {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #zoom-controls button {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .search-highlight rect {
+    stroke: #f0c27f !important;
+    stroke-width: 2.5 !important;
+  }
+
+  /* Thinner, muted connector for vertically-stacked resource links */
+  .link-resource {
+    stroke: #21262d;
+    stroke-width: 1px;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>GCP Org Visualizer</h1>
+  <div class="controls">
+    <input type="text" id="org-id-input" placeholder="Organization ID (optional)">
+    <button class="primary" id="btn-load">Load Structure</button>
+    <div class="sep"></div>
+    <button id="btn-expand">Expand All</button>
+    <button id="btn-collapse">Collapse All</button>
+    <div class="sep"></div>
+    <input type="text" id="search-input" placeholder="Search resources…" style="width:160px">
+    <button id="btn-fit">Fit to Screen</button>
+    <div class="sep"></div>
+    <button id="btn-download-csv" class="primary" title="Download full asset inventory as CSV">⬇ Download CSV</button>
+  </div>
+  <div id="legend">
+    <!-- populated by JS -->
+  </div>
+</div>
+
+<div id="canvas">
+  <svg id="tree-svg"></svg>
+
+  <div id="loading" class="hidden">
+    <div class="spinner"></div>
+    <p id="loading-msg">Fetching organization structure…</p>
+  </div>
+
+  <div id="empty-state">
+    <div class="icon">☁</div>
+    <div class="msg">Enter an Organization ID or click <strong>Load Structure</strong></div>
+    <div class="sub">Uses Application Default Credentials from the Cloud Run service account</div>
+  </div>
+
+  <div id="stats-bar" style="display:none">
+    <div class="stat-item">Orgs: <span id="st-orgs">0</span></div>
+    <div class="stat-item">Folders: <span id="st-folders">0</span></div>
+    <div class="stat-item">Projects: <span id="st-projects">0</span></div>
+    <div class="stat-item">Resources: <span id="st-resources">0</span></div>
+    <div class="stat-item">Total Nodes: <span id="st-total">0</span></div>
+  </div>
+
+  <div id="zoom-controls">
+    <button id="btn-zoom-in" title="Zoom in">+</button>
+    <button id="btn-zoom-out" title="Zoom out">−</button>
+    <button id="btn-zoom-reset" title="Reset zoom" style="font-size:11px">⌂</button>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const NODE_W = 200;
+const NODE_H = 56;
+const NODE_SPACING_X = 240;  // horizontal space per category node slot
+const LEVEL_HEIGHT = 120;    // vertical distance between org/folder/project/category levels
+const RESOURCE_SPACING_Y = NODE_H + 12;  // vertical pitch between stacked resource nodes
+
+const TYPE_META = {
+  root:         { color: '#58a6ff', borderColor: '#388bfd', icon: '☁',  label: 'Root'           },
+  organization: { color: '#1f6feb', borderColor: '#388bfd', icon: '🏢', label: 'Organization'    },
+  folder:       { color: '#e3b341', borderColor: '#d29922', icon: '📁', label: 'Folder'          },
+  project:      { color: '#238636', borderColor: '#3fb950', icon: '🔷', label: 'Project'         },
+  // category: fill/icon come from node.details.accent_color / node.details.icon set by backend
+  category:     { color: '#161b22', borderColor: '#444c56', icon: '📦', label: 'Product'         },
+  vm:           { color: '#da3633', borderColor: '#f85149', icon: '🖥', label: 'Compute VM'      },
+  cloudsql:     { color: '#8957e5', borderColor: '#a371f7', icon: '🗄', label: 'Cloud SQL'       },
+  bigquery:     { color: '#0d7377', borderColor: '#14a085', icon: '📊', label: 'BigQuery'        },
+  gke:          { color: '#bf8700', borderColor: '#d29922', icon: '⚙', label: 'GKE Cluster'     },
+  storage:      { color: '#444c56', borderColor: '#768390', icon: '🪣', label: 'Cloud Storage'   },
+  cloudrun:     { color: '#1158a4', borderColor: '#4078c9', icon: '🚀', label: 'Cloud Run'       },
+  pubsub:       { color: '#b36800', borderColor: '#e3862a', icon: '📨', label: 'Pub/Sub'         },
+  spanner:      { color: '#185a9d', borderColor: '#2075bf', icon: '🔗', label: 'Spanner'         },
+  function:     { color: '#880e4f', borderColor: '#c2185b', icon: 'ƒ',  label: 'Cloud Function'  },
+};
+
+// category is NOT a leaf — it contains resources and must be expandable.
+const LEAF_TYPES = new Set(['vm','cloudsql','bigquery','gke','storage','cloudrun','pubsub','spanner','function']);
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+
+const svg        = d3.select('#tree-svg');
+const tooltip    = document.getElementById('tooltip');
+const loadingEl  = document.getElementById('loading');
+const emptyEl    = document.getElementById('empty-state');
+const statsBar   = document.getElementById('stats-bar');
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let rootData = null;
+let nodeIdCounter = 0;
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+
+(function buildLegend() {
+  const legendEl = document.getElementById('legend');
+  Object.entries(TYPE_META).forEach(([type, meta]) => {
+    if (type === 'root' || type === 'category') return;
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<div class="legend-dot" style="background:${meta.color}"></div>${meta.label}`;
+    legendEl.appendChild(item);
+  });
+})();
+
+// ── SVG / Zoom setup ──────────────────────────────────────────────────────────
+
+const g = svg.append('g').attr('class', 'tree-root');
+
+const zoomBehavior = d3.zoom()
+  .scaleExtent([0.05, 3])
+  .on('zoom', e => g.attr('transform', e.transform));
+
+svg.call(zoomBehavior);
+
+// prevent default double-click zoom
+svg.on('dblclick.zoom', null);
+
+function fitToScreen() {
+  const svgEl = document.getElementById('tree-svg');
+  const svgW = svgEl.clientWidth;
+  const svgH = svgEl.clientHeight;
+  const gEl = g.node();
+  if (!gEl || !gEl.getBBox) return;
+  const bbox = gEl.getBBox();
+  if (bbox.width === 0 || bbox.height === 0) return;
+  const padding = 60;
+  const scale = Math.min(
+    (svgW - padding * 2) / bbox.width,
+    (svgH - padding * 2) / bbox.height,
+    1
+  );
+  const tx = svgW / 2 - scale * (bbox.x + bbox.width / 2);
+  const ty = padding - scale * bbox.y;
+  svg.transition().duration(600)
+    .call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+
+document.getElementById('btn-fit').addEventListener('click', fitToScreen);
+document.getElementById('btn-zoom-in').addEventListener('click', () => svg.transition().duration(300).call(zoomBehavior.scaleBy, 1.4));
+document.getElementById('btn-zoom-out').addEventListener('click', () => svg.transition().duration(300).call(zoomBehavior.scaleBy, 0.7));
+document.getElementById('btn-zoom-reset').addEventListener('click', fitToScreen);
+
+// ── Load data ─────────────────────────────────────────────────────────────────
+
+async function loadStructure(refresh = false) {
+  const orgId = document.getElementById('org-id-input').value.trim();
+  const params = new URLSearchParams();
+  if (orgId) params.set('org_id', orgId);
+  if (refresh) params.set('refresh', 'true');
+
+  setLoading(true, 'Fetching organization structure…');
+  emptyEl.classList.add('hidden');
+  statsBar.style.display = 'none';
+  g.selectAll('*').remove();
+
+  try {
+    const res = await fetch(`/api/org-structure?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    rootData = data;
+    renderTree(data);
+    updateStats(data);
+    statsBar.style.display = 'flex';
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+document.getElementById('btn-load').addEventListener('click', () => loadStructure(false));
+document.getElementById('org-id-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadStructure(false);
+});
+
+// ── Tree rendering ────────────────────────────────────────────────────────────
+
+function prepareHierarchy(data) {
+  const root = d3.hierarchy(data, d => d.children);
+  root.each(d => {
+    d._id = ++nodeIdCounter;
+    // Start collapsed beyond depth 1 (projects collapsed, resources hidden)
+    if (d.depth >= 2 && d.children && d.children.length > 0) {
+      d._children = d.children;
+      d.children = null;
+    }
+  });
+  return root;
+}
+
+let treeRoot;
+
+function renderTree(data) {
+  g.selectAll('*').remove();
+  treeRoot = prepareHierarchy(data);
+  treeRoot.x0 = 0;
+  treeRoot.y0 = 0;
+  update(treeRoot, true);
+}
+
+const treeLayout = d3.tree().nodeSize([NODE_SPACING_X, LEVEL_HEIGHT]);
+
+function update(source, initial = false) {
+  const duration = initial ? 0 : 500;
+
+  // ── Two-pass layout ────────────────────────────────────────────────────────
+  // Pass 1: Hide resource children from the D3 tree layout so each category
+  // occupies exactly one horizontal slot regardless of its resource count.
+  const catChildren = new Map();
+  treeRoot.each(d => {
+    if (d.data.type === 'category' && d.children) {
+      catChildren.set(d, d.children);
+      d.children = null;
+    }
+  });
+
+  treeLayout(treeRoot);  // positions org / folder / project / category horizontally
+
+  // Pass 2: Restore children and stack resources vertically under each category.
+  catChildren.forEach((children, cat) => {
+    cat.children = children;
+    children.forEach((child, i) => {
+      child.x = cat.x;                                      // same column as category
+      child.y = cat.y + LEVEL_HEIGHT + i * RESOURCE_SPACING_Y;  // stacked downward
+    });
+  });
+  // ──────────────────────────────────────────────────────────────────────────
+
+  const nodes = treeRoot.descendants();
+  const links = treeRoot.links();
+
+  // ── Links ──────────────────────────────────────────────────────────────────
+
+  const linkSel = g.selectAll('path.link')
+    .data(links, d => d.target._id);
+
+  const linkEnter = linkSel.enter()
+    .insert('path', 'g')
+    .attr('class', 'link')
+    .attr('d', () => {
+      const o = { x: source.x0 ?? source.x, y: source.y0 ?? source.y };
+      return bezier(o, o);
+    });
+
+  linkEnter.merge(linkSel)
+    .attr('class', d => LEAF_TYPES.has(d.target.data.type) ? 'link link-resource' : 'link')
+    .transition().duration(duration)
+    .attr('d', d => bezier(d.source, d.target));
+
+  linkSel.exit()
+    .transition().duration(duration)
+    .attr('d', () => {
+      const o = { x: source.x, y: source.y };
+      return bezier(o, o);
+    })
+    .remove();
+
+  // ── Nodes ──────────────────────────────────────────────────────────────────
+
+  const nodeSel = g.selectAll('g.node')
+    .data(nodes, d => d._id);
+
+  const nodeEnter = nodeSel.enter()
+    .append('g')
+    .attr('class', 'node')
+    .attr('transform', () => `translate(${source.x0 ?? source.x},${source.y0 ?? source.y})`)
+    .on('click', (event, d) => {
+      if (LEAF_TYPES.has(d.data.type)) return;
+      toggle(d);
+      update(d);
+    })
+    .on('mouseover', (event, d) => showTooltip(event, d))
+    .on('mousemove', event => moveTooltip(event))
+    .on('mouseout', () => hideTooltip());
+
+  // Background rect — category nodes use a dark fill + product-specific border colour
+  nodeEnter.append('rect')
+    .attr('width', NODE_W)
+    .attr('height', NODE_H)
+    .attr('x', -NODE_W / 2)
+    .attr('y', -NODE_H / 2)
+    .attr('rx', 8)
+    .attr('ry', 8)
+    .attr('fill', d => d.data.type === 'category'
+      ? '#161b22'
+      : (TYPE_META[d.data.type] || TYPE_META.root).color)
+    .attr('stroke', d => d.data.type === 'category'
+      ? (d.data.details?.accent_color || '#444c56')
+      : (TYPE_META[d.data.type] || TYPE_META.root).borderColor)
+    .attr('stroke-width', d => d.data.type === 'category' ? 2 : 1.5);
+
+  // Icon — category nodes use the product-specific icon from details
+  nodeEnter.append('text')
+    .attr('class', 'node-icon')
+    .attr('x', -NODE_W / 2 + 18)
+    .attr('y', 0)
+    .attr('text-anchor', 'middle')
+    .text(d => d.data.type === 'category'
+      ? (d.data.details?.icon || '📦')
+      : (TYPE_META[d.data.type] || TYPE_META.root).icon);
+
+  // Name
+  nodeEnter.append('text')
+    .attr('class', 'node-name')
+    .attr('x', -NODE_W / 2 + 34)
+    .attr('y', NODE_H / 2 < 20 ? 0 : -8)
+    .attr('text-anchor', 'start')
+    .text(d => truncate(d.data.name, 18));
+
+  // Sub-label (type + key detail)
+  nodeEnter.append('text')
+    .attr('class', 'node-sub')
+    .attr('x', -NODE_W / 2 + 34)
+    .attr('y', 10)
+    .attr('text-anchor', 'start')
+    .text(d => nodeSubLabel(d.data));
+
+  // Expand / collapse indicator
+  nodeEnter.append('text')
+    .attr('class', 'toggle-btn')
+    .attr('x', NODE_W / 2 - 12)
+    .attr('y', 1)
+    .attr('text-anchor', 'middle')
+    .style('display', d => (!LEAF_TYPES.has(d.data.type)) ? null : 'none')
+    .text(d => (d._children ? '▸' : d.children ? '▾' : ''));
+
+  // Child-count badge on collapsed nodes
+  nodeEnter.append('text')
+    .attr('class', 'badge')
+    .attr('x', NODE_W / 2 - 30)
+    .attr('y', -NODE_H / 2 + 12)
+    .attr('text-anchor', 'middle')
+    .text(d => {
+      const total = (d._children || d.children || []).length;
+      return total > 0 && d._children ? `${total}` : '';
+    });
+
+  // Animate enter
+  const nodeUpdate = nodeEnter.merge(nodeSel);
+  nodeUpdate.transition().duration(duration)
+    .attr('transform', d => `translate(${d.x},${d.y})`);
+
+  // Refresh toggle text + badge after toggle
+  nodeUpdate.select('.toggle-btn')
+    .text(d => (d._children ? '▸' : d.children ? '▾' : ''));
+
+  nodeUpdate.select('.badge')
+    .text(d => {
+      const total = (d._children || []).length;
+      return total > 0 && d._children ? `${total}` : '';
+    });
+
+  nodeSel.exit()
+    .transition().duration(duration)
+    .attr('transform', () => `translate(${source.x},${source.y})`)
+    .remove();
+
+  // Store for next transition origin
+  nodes.forEach(d => { d.x0 = d.x; d.y0 = d.y; });
+
+  // Fit on first render
+  if (initial) setTimeout(fitToScreen, 100);
+}
+
+function toggle(d) {
+  if (d.children) { d._children = d.children; d.children = null; }
+  else { d.children = d._children; d._children = null; }
+}
+
+function bezier(s, d) {
+  // Stacked resources share the same x as their category — draw a straight
+  // vertical line so they form a clean column rather than splaying outward.
+  if (Math.abs(s.x - d.x) < 1) {
+    return `M ${s.x} ${s.y + NODE_H / 2} L ${d.x} ${d.y - NODE_H / 2}`;
+  }
+  const midY = (s.y + d.y) / 2;
+  return `M ${s.x} ${s.y + NODE_H / 2}
+          C ${s.x} ${midY},
+            ${d.x} ${midY},
+            ${d.x} ${d.y - NODE_H / 2}`;
+}
+
+function truncate(str, maxLen) {
+  if (!str) return '';
+  return str.length > maxLen ? str.slice(0, maxLen - 1) + '…' : str;
+}
+
+function nodeSubLabel(d) {
+  switch (d.type) {
+    case 'organization': return `org: ${d.details?.org_id || ''}`;
+    case 'folder':       return `folder: ${d.details?.folder_id || ''}`;
+    case 'project':      return `proj: ${d.details?.project_id || ''}`;
+    case 'category': {
+      const n = d.details?.count || 0;
+      return `${n} resource${n !== 1 ? 's' : ''}`;
+    }
+    case 'vm':       return `${d.details?.machine_type || ''} · ${d.details?.zone || ''}`;
+    case 'cloudsql': return `${d.details?.database_version || ''} · ${d.details?.region || ''}`;
+    case 'bigquery': return `dataset · ${d.details?.location || ''}`;
+    case 'gke':      return `${d.details?.node_count || 0} nodes · ${d.details?.location || ''}`;
+    case 'storage':  return `${d.details?.storage_class || ''} · ${d.details?.location || ''}`;
+    case 'cloudrun': return `${d.details?.region || ''} · ${d.details?.state || ''}`;
+    case 'pubsub':   return 'Pub/Sub topic';
+    case 'spanner':  return `${d.details?.node_count || 0} nodes · ${d.details?.state || ''}`;
+    case 'function': return `${d.details?.runtime || ''} · ${d.details?.state || ''}`;
+    default:         return (TYPE_META[d.type] || {}).label || d.type;
+  }
+}
+
+// ── Expand / Collapse All ─────────────────────────────────────────────────────
+
+function expandAll(d) {
+  if (d._children) { d.children = d._children; d._children = null; }
+  (d.children || []).forEach(expandAll);
+}
+
+function collapseAll(d, depth = 0) {
+  // Collapse at category level and below (depth > 2) so projects stay visible with their categories hidden
+  if (d.children && depth > 2) { d._children = d.children; d.children = null; return; }
+  (d.children || []).forEach(c => collapseAll(c, depth + 1));
+}
+
+document.getElementById('btn-expand').addEventListener('click', () => {
+  if (!treeRoot) return;
+  expandAll(treeRoot);
+  update(treeRoot);
+});
+
+document.getElementById('btn-collapse').addEventListener('click', () => {
+  if (!treeRoot) return;
+  collapseAll(treeRoot, 0);
+  update(treeRoot);
+});
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+document.getElementById('search-input').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase();
+  g.selectAll('g.node').classed('search-highlight', d => {
+    if (!q) return false;
+    return d.data.name.toLowerCase().includes(q);
+  });
+});
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+
+function showTooltip(event, d) {
+  const isCategory = d.data.type === 'category';
+  const meta = TYPE_META[d.data.type] || TYPE_META.root;
+  const icon = isCategory ? (d.data.details?.icon || '📦') : meta.icon;
+  const label = isCategory ? 'GCP Product Category' : meta.label;
+  const details = d.data.details || {};
+
+  let html = `<div class="tt-title">${icon} ${d.data.name}</div>`;
+  html += `<div class="tt-row"><span class="tt-key">Type</span><span class="tt-val">${label}</span></div>`;
+
+  Object.entries(details).forEach(([k, v]) => {
+    if (k === 'api_errors' || k === 'icon' || k === 'accent_color') return;
+    if (v !== '' && v !== null && v !== undefined && typeof v !== 'object') {
+      html += `<div class="tt-row"><span class="tt-key">${k.replace(/_/g,' ')}</span><span class="tt-val">${v}</span></div>`;
+    }
+  });
+
+  const childCount = (d.children || d._children || []).length;
+  if (childCount > 0) {
+    html += `<div class="tt-row"><span class="tt-key">children</span><span class="tt-val">${childCount}</span></div>`;
+  }
+
+  // Show API errors if any on project nodes
+  if (details.api_errors && Object.keys(details.api_errors).length > 0) {
+    const failedApis = Object.keys(details.api_errors).join(', ');
+    html += `<div class="tt-row" style="margin-top:6px;border-top:1px solid #30363d;padding-top:6px">
+      <span class="tt-key" style="color:#f85149">unavailable</span>
+      <span class="tt-val" style="color:#f85149">${failedApis}</span></div>`;
+  }
+
+  tooltip.innerHTML = html;
+  tooltip.classList.add('visible');
+  moveTooltip(event);
+}
+
+function moveTooltip(event) {
+  const x = event.clientX + 16;
+  const y = event.clientY + 16;
+  tooltip.style.left = `${Math.min(x, window.innerWidth - 280)}px`;
+  tooltip.style.top  = `${Math.min(y, window.innerHeight - 200)}px`;
+}
+
+function hideTooltip() {
+  tooltip.classList.remove('visible');
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+function updateStats(data) {
+  const counts = { organization: 0, folder: 0, project: 0, resource: 0, total: 0 };
+  function walk(node) {
+    counts.total++;
+    if (node.type === 'organization') counts.organization++;
+    else if (node.type === 'folder') counts.folder++;
+    else if (node.type === 'project') counts.project++;
+    else if (LEAF_TYPES.has(node.type)) counts.resource++;
+    (node.children || []).forEach(walk);
+  }
+  walk(data);
+  document.getElementById('st-orgs').textContent = counts.organization;
+  document.getElementById('st-folders').textContent = counts.folder;
+  document.getElementById('st-projects').textContent = counts.project;
+  document.getElementById('st-resources').textContent = counts.resource;
+  document.getElementById('st-total').textContent = counts.total;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function setLoading(on, msg = '') {
+  loadingEl.classList.toggle('hidden', !on);
+  if (msg) document.getElementById('loading-msg').textContent = msg;
+}
+
+function showError(msg) {
+  emptyEl.classList.remove('hidden');
+  emptyEl.querySelector('.msg').textContent = `Error: ${msg}`;
+  emptyEl.querySelector('.sub').textContent = 'Check Cloud Run logs and IAM permissions.';
+}
+
+// ── CSV Download ──────────────────────────────────────────────────────────────
+
+document.getElementById('btn-download-csv').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-download-csv');
+  const orgId = document.getElementById('org-id-input').value.trim();
+  const params = new URLSearchParams();
+  if (orgId) params.set('org_id', orgId);
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Preparing…';
+  try {
+    const res = await fetch(`/api/export-csv?${params}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gcp_asset_inventory.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`CSV export failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⬇ Download CSV';
+  }
+});
+</script>
+</body>
+</html>
